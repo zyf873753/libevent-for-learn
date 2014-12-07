@@ -54,7 +54,7 @@
 #include <fcntl.h>
 #endif
 
-#include "event2/event.h"
+#include "event2/event.h"//event.c也include了signal.h文件，一般头文件都不include自己写的文件，而由c文件来包括，signal.c和event.c可以互相对方的头文件
 #include "event2/event_struct.h"
 #include "event-internal.h"
 #include "event2/util.h"
@@ -121,18 +121,19 @@ evsig_set_base(struct event_base *base)
 	EVSIGBASE_LOCK();
 	evsig_base = base;
 	evsig_base_n_signals_added = base->sig.ev_n_signals_added;
-	evsig_base_fd = base->sig.ev_signal_pair[0];
+	evsig_base_fd = base->sig.ev_signal_pair[0];//0用来信号处理函数发送给base，1已用base接收信号
 	EVSIGBASE_UNLOCK();
 }
 
+//接收信号处理函数发过来的信号，激活base
 /* Callback for when the signal handler write a byte to our signaling socket */
 static void
 evsig_cb(evutil_socket_t fd, short what, void *arg)
 {
-	static char signals[1024];
+	static char signals[1024];//用来存放信号处理函数传过来的的信号？
 	ev_ssize_t n;
 	int i;
-	int ncaught[NSIG];
+	int ncaught[NSIG];//NSIG在哪定义？
 	struct event_base *base;
 
 	base = arg;
@@ -142,8 +143,8 @@ evsig_cb(evutil_socket_t fd, short what, void *arg)
 	while (1) {
 		n = recv(fd, signals, sizeof(signals), 0);
 		if (n == -1) {
-			int err = evutil_socket_geterror(fd);
-			if (! EVUTIL_ERR_RW_RETRIABLE(err))
+			int err = evutil_socket_geterror(fd);//windows平台这是函数，而linux平台这是宏函数
+			if (! EVUTIL_ERR_RW_RETRIABLE(err))　//判断是否可重读写，即检查EINTR和EAGAIN
 				event_sock_err(1, fd, "%s: recv", __func__);
 			break;
 		} else if (n == 0) {
@@ -153,25 +154,26 @@ evsig_cb(evutil_socket_t fd, short what, void *arg)
 		for (i = 0; i < n; ++i) {
 			ev_uint8_t sig = signals[i];
 			if (sig < NSIG)
-				ncaught[sig]++;
+				ncaught[sig]++;//记录传进来的信号
 		}
 	}
 
-	EVBASE_ACQUIRE_LOCK(base, th_base_lock);
+	EVBASE_ACQUIRE_LOCK(base, th_base_lock);//base虽然是在本函数中定义的，貌似在栈上，但是他指向的地址是从外部传过来的，所以需要加锁
 	for (i = 0; i < NSIG; ++i) {
 		if (ncaught[i])
-			evmap_signal_active(base, i, ncaught[i]);
+			evmap_signal_active(base, i, ncaught[i]);//激活base中等待的信号
 	}
 	EVBASE_RELEASE_LOCK(base, th_base_lock);
 }
 
+//初始化base->sig成员
 int
 evsig_init(struct event_base *base)
 {
 	/*
 	 * Our signal handler is going to write to one end of the socket
 	 * pair to wake up our event loop.  The event loop then scans for
-	 * signals that got delivered.
+	 * signals that got delivered.　//这感觉就是上一个函数的功能
 	 */
 	if (evutil_socketpair(
 		    AF_UNIX, SOCK_STREAM, 0, base->sig.ev_signal_pair) == -1) {
@@ -185,21 +187,21 @@ evsig_init(struct event_base *base)
 		return -1;
 	}
 
-	evutil_make_socket_closeonexec(base->sig.ev_signal_pair[0]);
+	evutil_make_socket_closeonexec(base->sig.ev_signal_pair[0]);//两个都设置执行时关闭
 	evutil_make_socket_closeonexec(base->sig.ev_signal_pair[1]);
-	base->sig.sh_old = NULL;
+	base->sig.sh_old = NULL; //？
 	base->sig.sh_old_max = 0;
 
-	evutil_make_socket_nonblocking(base->sig.ev_signal_pair[0]);
+	evutil_make_socket_nonblocking(base->sig.ev_signal_pair[0]);//设置为非阻塞
 	evutil_make_socket_nonblocking(base->sig.ev_signal_pair[1]);
 
-	event_assign(&base->sig.ev_signal, base, base->sig.ev_signal_pair[1],
+	event_assign(&base->sig.ev_signal, base, base->sig.ev_signal_pair[1],//注册了上一个函数evsig_cb为回调函数
 		EV_READ | EV_PERSIST, evsig_cb, base);
 
-	base->sig.ev_signal.ev_flags |= EVLIST_INTERNAL;
-	event_priority_set(&base->sig.ev_signal, 0);
+	base->sig.ev_signal.ev_flags |= EVLIST_INTERNAL;//sig为evsig_info类型，ev_signal为event类型。设置为内部，一直没搞懂是啥
+	event_priority_set(&base->sig.ev_signal, 0);//初始优先级为0
 
-	base->evsigsel = &evsigops;
+	base->evsigsel = &evsigops;//设置信号处理的后端
 
 	return 0;
 }
@@ -218,12 +220,13 @@ _evsig_set_handler(struct event_base *base,
 	struct evsig_info *sig = &base->sig;
 	void *p;
 
+	//重置sig->sh_old的空间
 	/*
 	 * resize saved signal handler array up to the highest signal number.
 	 * a dynamic array is used to keep footprint on the low side.
 	 */
-	if (evsignal >= sig->sh_old_max) {
-		int new_max = evsignal + 1;
+	if (evsignal >= sig->sh_old_max) {　
+		int new_max = evsignal + 1;//信号是从零开始的？
 		event_debug(("%s: evsignal (%d) >= sh_old_max (%d), resizing",
 			    __func__, evsignal, sig->sh_old_max));
 		p = mm_realloc(sig->sh_old, new_max * sizeof(*sig->sh_old));
@@ -232,13 +235,15 @@ _evsig_set_handler(struct event_base *base,
 			return (-1);
 		}
 
-		memset((char *)p + sig->sh_old_max * sizeof(*sig->sh_old),
+		memset((char *)p + sig->sh_old_max * sizeof(*sig->sh_old),//只把新加的空间清零
 		    0, (new_max - sig->sh_old_max) * sizeof(*sig->sh_old));
 
 		sig->sh_old_max = new_max;
 		sig->sh_old = p;
 	}
 
+	
+	//为什么有分配一次？上面的realloc难道没有分配？
 	/* allocate space for previous handler out of dynamic array */
 	sig->sh_old[evsignal] = mm_malloc(sizeof *sig->sh_old[evsignal]);
 	if (sig->sh_old[evsignal] == NULL) {
@@ -251,9 +256,9 @@ _evsig_set_handler(struct event_base *base,
 	memset(&sa, 0, sizeof(sa));
 	sa.sa_handler = handler;
 	sa.sa_flags |= SA_RESTART;
-	sigfillset(&sa.sa_mask);
+	sigfillset(&sa.sa_mask);//当执行信号处理函数时，屏蔽所有信号
 
-	if (sigaction(evsignal, &sa, sig->sh_old[evsignal]) == -1) {
+	if (sigaction(evsignal, &sa, sig->sh_old[evsignal]) == -1) {//把信号evsignal旧的信号处理函数存放在sig->sh_old[evsignal]上
 		event_warn("sigaction");
 		mm_free(sig->sh_old[evsignal]);
 		sig->sh_old[evsignal] = NULL;
@@ -272,11 +277,12 @@ _evsig_set_handler(struct event_base *base,
 	return (0);
 }
 
+//给base添加监听的信号
 static int
 evsig_add(struct event_base *base, evutil_socket_t evsignal, short old, short events, void *p)
 {
 	struct evsig_info *sig = &base->sig;
-	(void)p;
+	(void)p;//？
 
 	EVUTIL_ASSERT(evsignal >= 0 && evsignal < NSIG);
 
@@ -291,8 +297,8 @@ evsig_add(struct event_base *base, evutil_socket_t evsignal, short old, short ev
 		    "not rely on this behavior in future Libevent versions.",
 		    base, evsig_base, base->evsel->name);
 	}
-	evsig_base = base;
-	evsig_base_n_signals_added = ++sig->ev_n_signals_added;
+	evsig_base = base;//正如上面的警告，每次只能有一个signal的base
+	evsig_base_n_signals_added = ++sig->ev_n_signals_added;//先加后赋值
 	evsig_base_fd = base->sig.ev_signal_pair[0];
 	EVSIGBASE_UNLOCK();
 
@@ -302,7 +308,7 @@ evsig_add(struct event_base *base, evutil_socket_t evsignal, short old, short ev
 	}
 
 
-	if (!sig->ev_signal_added) {
+	if (!sig->ev_signal_added) {//如果siginfo结构中未标识已添加信号事件，那就标识
 		if (event_add(&sig->ev_signal, NULL))
 			goto err;
 		sig->ev_signal_added = 1;
@@ -318,6 +324,7 @@ err:
 	return (-1);
 }
 
+//恢复指定信号的信号处理函数，将sig->sh_old[evsignal]设为NULL
 int
 _evsig_restore_handler(struct event_base *base, int evsignal)
 {
@@ -331,9 +338,9 @@ _evsig_restore_handler(struct event_base *base, int evsignal)
 
 	/* restore previous handler */
 	sh = sig->sh_old[evsignal];
-	sig->sh_old[evsignal] = NULL;
+	sig->sh_old[evsignal] = NULL;//将旧的sigaction只为NULL，有sh释放
 #ifdef _EVENT_HAVE_SIGACTION
-	if (sigaction(evsignal, sh, NULL) == -1) {
+	if (sigaction(evsignal, sh, NULL) == -1) {//不记录新的信号处理函数
 		event_warn("sigaction");
 		ret = -1;
 	}
@@ -349,6 +356,7 @@ _evsig_restore_handler(struct event_base *base, int evsignal)
 	return ret;
 }
 
+//删除base中指定的信号，并且恢复之前的信号处理函数
 static int
 evsig_del(struct event_base *base, evutil_socket_t evsignal, short old, short events, void *p)
 {
@@ -365,6 +373,7 @@ evsig_del(struct event_base *base, evutil_socket_t evsignal, short old, short ev
 	return (_evsig_restore_handler(base, (int)evsignal));
 }
 
+//信号处理函数
 static void __cdecl
 evsig_handler(int sig)
 {
@@ -387,7 +396,7 @@ evsig_handler(int sig)
 
 	/* Wake up our notification mechanism */
 	msg = sig;
-	send(evsig_base_fd, (char*)&msg, 1, 0);
+	send(evsig_base_fd, (char*)&msg, 1, 0);//将激活的信号发送给base
 	errno = save_errno;
 #ifdef WIN32
 	EVUTIL_SET_SOCKET_ERROR(socket_errno);
@@ -399,13 +408,14 @@ evsig_dealloc(struct event_base *base)
 {
 	int i = 0;
 	if (base->sig.ev_signal_added) {
-		event_del(&base->sig.ev_signal);
+		event_del(&base->sig.ev_signal);//删除信号事件
 		base->sig.ev_signal_added = 0;
 	}
 	/* debug event is created in evsig_init/event_assign even when
 	 * ev_signal_added == 0, so unassign is required */
 	event_debug_unassign(&base->sig.ev_signal);
 
+	//恢复所有的信号处理函数
 	for (i = 0; i < NSIG; ++i) {
 		if (i < base->sig.sh_old_max && base->sig.sh_old[i] != NULL)
 			_evsig_restore_handler(base, i);
@@ -418,6 +428,7 @@ evsig_dealloc(struct event_base *base)
 	}
 	EVSIGBASE_UNLOCK();
 
+	//关闭socketpair描述府
 	if (base->sig.ev_signal_pair[0] != -1) {
 		evutil_closesocket(base->sig.ev_signal_pair[0]);
 		base->sig.ev_signal_pair[0] = -1;
@@ -435,6 +446,7 @@ evsig_dealloc(struct event_base *base)
 	}
 }
 
+//?
 #ifndef _EVENT_DISABLE_THREAD_SUPPORT
 int
 evsig_global_setup_locks_(const int enable_locks)

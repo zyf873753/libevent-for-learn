@@ -49,9 +49,9 @@ struct evsig_info {
 	/* Array of previous signal handler objects before Libevent started
 	 * messing with them.  Used to restore old signal handlers. */
 #ifdef _EVENT_HAVE_SIGACTION
-	struct sigaction **sh_old;//?
+	struct sigaction **sh_old;//用来存放每个信号就得信号处理函数，把每次调用sigation返回的旧的信号处理函数(这里是sigaction结构)存放在该数组中，数组的索引就是信号的值
 #else
-	ev_sighandler_t **sh_old;//? //函数指针数组，linux中有sigaction结构，所以不需要这个
+	ev_sighandler_t **sh_old; //函数指针数组，linux中有sigaction结构，所以不需要这个
 #endif
 	/* Size of sh_old. */
 	int sh_old_max;
